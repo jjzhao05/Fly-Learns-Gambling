@@ -1,7 +1,7 @@
 # Fly connectome blackjack
 
-A fixed (untrained) fly-connectome-like recurrent reservoir feeds hand
-total, usable-ace flag, and dealer upcard into a network of 300 neurons.
+A fixed (untrained) fly-connectome recurrent reservoir feeds hand total,
+usable-ace flag, and dealer upcard into a network of real FlyWire neurons.
 Only a linear readout on top of the reservoir is trained, via one-step
 Q-learning, to pick hit/stand/double.
 
@@ -11,13 +11,10 @@ Q-learning, to pick hit/stand/double.
   [eonsystemspbc/fly-brain](https://github.com/eonsystemspbc/fly-brain)'s
   `2025_Connectivity_783.parquet` (ultimately sourced from FlyWire / Shiu
   et al. 2023), caches it as `flywire_full.parquet`, and builds it as a
-  sparse matrix (`scipy.sparse`). If the download fails it falls back to
-  `flywire_subgraph_300.csv`, a bundled real 300-neuron induced subgraph
-  (the 300 highest-degree neurons from the same dataset, kept densely
-  connected). If even that's missing, it falls back to a synthetic sparse
-  matrix matched to fly-connectome statistics (Dale's law, ~80/20 exc/inh,
-  log-normal weights, modular wiring). Reports whichever source it used:
-  `flywire_full_brain`, `flywire_real_subsample`, or `synthetic_fly_like`.
+  sparse matrix (`scipy.sparse`). If the download fails it falls back to a
+  synthetic sparse matrix matched to fly-connectome statistics (Dale's
+  law, ~80/20 exc/inh, log-normal weights, modular wiring). Reports
+  whichever source it used: `flywire_full_brain` or `synthetic_fly_like`.
 - `reservoir.py` - wraps the matrix as a leaky-integrator RNN (spectral
   radius rescaled to 0.9 via sparse power iteration, fixed random input
   projection), and supports batched state so many hands can be run through
@@ -39,6 +36,13 @@ Q-learning, to pick hit/stand/double.
   strategy so disagreements are visible at a glance.
 - `results_training_curve.png`, `results_report.txt`, `results_policy_grid.txt`
   - output of the last training run.
+- `brain_data.py` - joins connectome neuron indices to their real FlyWire
+  soma position + cell class (optic/central/sensory/other), for drawing
+  the whole brain instead of an abstract graph. Caches the join.
+- `streamlit_app.py` - live viewer: reads whatever `agent_weights.npy`
+  `train.py` has most recently checkpointed (every ~20s while training)
+  and plays a hand against it, with the brain lighting up per decision.
+  Run `streamlit run streamlit_app.py` alongside a running `train.py`.
 
 ## Running
 ```
@@ -49,8 +53,8 @@ python policy_report.py
 
 ## Results (whole-brain reservoir: 138,639 real FlyWire neurons)
 10,000 training hands (the sparse matrix-vector product per reservoir
-step costs ~14ms per hand at this size, ~500x the 300-neuron reservoir,
-so far fewer hands fit in a reasonable run):
+step costs ~14ms per hand at this size, so far fewer hands fit in a
+reasonable run than a smaller reservoir would allow):
 
 | Policy | Win rate | EV/hand |
 |---|---|---|
@@ -59,8 +63,8 @@ so far fewer hands fit in a reasonable run):
 | Random | 0.296 | -0.458 |
 
 Still clearly above random with zero hand-coded rules, but further from
-basic strategy than the 300-neuron reservoir got after 300k hands (see
-git history / `results_policy_grid.txt`) - it's undertrained, not a sign
+basic strategy than a smaller, more-trained reservoir gets (see git
+history / `results_policy_grid.txt`) - it's undertrained, not a sign
 the extra neurons hurt. `results_policy_grid.txt` shows the correct
 hit/stand shape emerging for 17+ and clean 12-16-vs-weak-dealer-card
 decisions, but noisier decisions on low hard totals (4-11) where more
@@ -70,5 +74,5 @@ TD rarely reinforces a rare, higher-variance action.
 
 To use a smaller, faster-training reservoir instead of the whole brain,
 delete `flywire_full.parquet` (if present) and call
-`load_connectome(prefer_full=False)` in `train.py`, which uses the bundled
-300-neuron real subgraph.
+`load_connectome(prefer_full=False)` in `train.py`, which uses the
+synthetic fly-like fallback network.

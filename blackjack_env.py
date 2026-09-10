@@ -1,8 +1,10 @@
 """Standard casino blackjack: 6-deck shoe, dealer stands on all 17s,
-blackjack pays 3:2, double down on first two cards only."""
+blackjack pays 3:2, double down on first two cards only. A split plays as
+two sequential sub-hands, each settled against its own fresh dealer draw
+(same up-card) -- simpler than tracking two hands at once, same result."""
 import numpy as np
 
-ACTIONS = ("hit", "stand", "double")
+ACTIONS = ("hit", "stand", "double", "split")
 N_DECKS = 6
 
 
@@ -39,6 +41,10 @@ class BlackjackEnv:
         self.dealer = [self._draw(), self._draw()]
         self.done = False
         self.doubled = False
+        self.pending_hand = None
+        self.split_used = False
+        self.aces_split = False
+        self.hand_ended = False
         p_bj = self._player_blackjack()
         d_bj = hand_value(self.dealer)[0] == 21
         if p_bj or d_bj:
@@ -52,6 +58,14 @@ class BlackjackEnv:
 
     def _player_blackjack(self):
         return len(self.player) == 2 and hand_value(self.player)[0] == 21
+
+    def legal_actions(self):
+        acts = ["hit", "stand"]
+        if len(self.player) == 2:
+            acts.append("double")
+            if not self.split_used and self.player[0] == self.player[1]:
+                acts.append("split")
+        return tuple(acts)
 
     def _dealer_play(self):
         while True:
@@ -73,22 +87,40 @@ class BlackjackEnv:
             return -mult
         return 0.0
 
+    def _advance(self, carry=0.0):
+        self.hand_ended = True
+        reward = carry + self._settle()
+        if self.pending_hand is None:
+            self.done = True
+            return self._obs(), reward, True
+        self.player = self.pending_hand
+        self.pending_hand = None
+        self.doubled = False
+        self.dealer = [self.dealer[0], self._draw()]
+        if self.aces_split:
+            return self._advance(carry=reward)
+        return self._obs(), reward, False
+
     def step(self, action):
         assert not self.done
-        reward = 0.0
+        self.hand_ended = False
+        if action == "split":
+            self.split_used = True
+            c1, c2 = self.player
+            self.pending_hand = [c2, self._draw()]
+            self.player = [c1, self._draw()]
+            if c1 == 1:
+                self.aces_split = True
+                return self._advance()
+            return self._obs(), 0.0, False
         if action == "hit":
             self.player.append(self._draw())
             total, _ = hand_value(self.player)
-            if total > 21 or total == 21:
-                self.done = True
-                reward = self._settle() if total <= 21 else -1.0
-        elif action == "double":
+            if total >= 21:
+                return self._advance()
+            return self._obs(), 0.0, False
+        if action == "double":
             self.doubled = True
             self.player.append(self._draw())
-            self.done = True
-            total, _ = hand_value(self.player)
-            reward = -2.0 if total > 21 else self._settle()
-        else:  # stand
-            self.done = True
-            reward = self._settle()
-        return self._obs(), reward, self.done
+            return self._advance()
+        return self._advance()  # stand

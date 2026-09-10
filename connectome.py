@@ -1,6 +1,6 @@
 """Load the real whole-brain FlyWire connectome as a sparse adjacency
-matrix, falling back to a bundled real 300-neuron subsample, then to a
-synthetic matrix, if the full download isn't reachable.
+matrix, falling back to a synthetic fly-like matrix if the full download
+isn't reachable.
 
 Full data source: https://github.com/eonsystemspbc/fly-brain
 (2025_Connectivity_783.parquet: ~138,600 neurons, ~15M signed synapse
@@ -11,10 +11,9 @@ import urllib.request
 import numpy as np
 from scipy import sparse
 
-N_NEURONS_SUB = 300  # size of the bundled real-data fallback
+SYNTHETIC_N = 300  # size of the synthetic fallback network
 _HERE = os.path.dirname(__file__)
 _FULL_CACHE = os.path.join(_HERE, "flywire_full.parquet")
-_SUB_FILE = os.path.join(_HERE, "flywire_subgraph_300.csv")
 _FULL_URL = (
     "https://raw.githubusercontent.com/eonsystemspbc/fly-brain/main/"
     "data/2025_Connectivity_783.parquet"
@@ -50,22 +49,9 @@ def _load_whole_brain():
     return W
 
 
-def _load_real_subsample(path=_SUB_FILE, n=N_NEURONS_SUB):
-    if not os.path.exists(path):
-        return None
-    import csv
-    rows, cols, vals = [], [], []
-    with open(path) as f:
-        for row in csv.DictReader(f):
-            rows.append(int(row["post"]))
-            cols.append(int(row["pre"]))
-            vals.append(float(row["weight"]))
-    return sparse.csr_matrix((vals, (rows, cols)), shape=(n, n))
-
-
-def _synthetic_fly_like(n=N_NEURONS_SUB, sparsity=0.02, seed=0):
+def _synthetic_fly_like(n=SYNTHETIC_N, sparsity=0.02, seed=0):
     """Dale's-law sparse matrix with fly-connectome-like statistics, used
-    only if no real data (full or subsample) can be loaded."""
+    only if the real connectome can't be loaded."""
     rng = np.random.default_rng(seed)
     n_modules = 10
     module_of = rng.integers(0, n_modules, size=n)
@@ -89,7 +75,4 @@ def load_connectome(seed=0, prefer_full=True):
         W = _load_whole_brain()
         if W is not None:
             return W, "flywire_full_brain"
-    W = _load_real_subsample()
-    if W is not None:
-        return W, "flywire_real_subsample"
-    return _synthetic_fly_like(), "synthetic_fly_like"
+    return _synthetic_fly_like(seed=seed), "synthetic_fly_like"

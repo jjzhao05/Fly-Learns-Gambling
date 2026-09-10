@@ -4,6 +4,9 @@ to play blackjack, then compare it to published basic strategy.
 Hands are simulated in batches so the (potentially whole-brain-sized)
 reservoir's sparse matrix-vector product is done once per batch step
 instead of once per hand."""
+import json
+import os
+import time
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -15,12 +18,33 @@ from blackjack_env import BlackjackEnv, ACTIONS, hand_value
 from agent import QReadout, featurize
 from basic_strategy import basic_strategy_action
 
-N_HANDS = 10_000
+HANDS_THIS_RUN = 100_000  # how many more hands to play, on top of whatever's
+                           # already in the checkpoint -- each run is additive
 BATCH = 64
-LR_REFERENCE = 0.002  # tuned for a 300-neuron reservoir
+LR_REFERENCE = 0.002  # base learning rate, scaled by scaled_lr() below
 EPS_START, EPS_END, EPS_DECAY_HANDS = 1.0, 0.02, 7_000
+EPSILON_RESTART = 0.3  # set a value (0-1) to reopen exploration and decay
+                        # from there again on resume (e.g. after adding a new
+                        # action, so it actually gets tried); None to keep
+                        # decaying from hands_done as if nothing changed
 LOG_EVERY_BATCHES = 10
+CHECKPOINT_EVERY_SECONDS = 20  # so a live viewer (streamlit_app.py) sees progress
 EVAL_HANDS = 1_500
+
+
+def checkpoint(agent, source, n_neurons, hands_done, win_rate, ev):
+    # Write to a temp file and atomically rename over the real one -- a
+    # plain np.save/json.dump writes the target file in place, so a
+    # concurrent reader (streamlit_app.py, polling every rerun) can catch
+    # it mid-write and see a truncated/corrupt file. os.replace is atomic
+    # on both Windows and POSIX, so readers only ever see a complete old
+    # or complete new file, never a partial one.
+    np.save("agent_weights.npy.tmp.npy", agent.W)
+    os.replace("agent_weights.npy.tmp.npy", "agent_weights.npy")
+    with open("agent_meta.json.tmp", "w") as f:
+        json.dump({"source": source, "n_neurons": int(n_neurons), "hands_done": int(hands_done),
+                    "win_rate": float(win_rate), "ev": float(ev), "done": False}, f)
+    os.replace("agent_meta.json.tmp", "agent_meta.json")
 
 
 def scaled_lr(n_features, reference_n=301):
@@ -34,9 +58,19 @@ def raw_input_vec(total, usable_ace, dealer_up):
     return np.array([total / 21.0, float(usable_ace), dealer_up / 11.0], dtype=np.float32)
 
 
-def epsilon_at(hand_idx):
+def epsilon_at(hand_idx, start=EPS_START):
     frac = min(hand_idx / EPS_DECAY_HANDS, 1.0)
-    return EPS_START + frac * (EPS_END - EPS_START)
+    return start + frac * (EPS_END - start)
+
+
+def legal_mask(envs, active):
+    """(n_actions, B) bool mask of which actions are legal in each active lane."""
+    mask = np.zeros((len(ACTIONS), len(envs)), dtype=bool)
+    for i, e in enumerate(envs):
+        if active[i]:
+            for a in e.legal_actions():
+                mask[ACTIONS.index(a), i] = True
+    return mask
 
 
 def play_batch(envs, reservoir, agent, epsilon, learn=True):
@@ -44,7 +78,6 @@ def play_batch(envs, reservoir, agent, epsilon, learn=True):
     obs = [e.reset() for e in envs]
     done = np.array([e.done for e in envs])
     reward = np.array([e.natural_reward if e.done else 0.0 for e in envs], dtype=np.float32)
-    first_action = True
 
     reservoir.reset(batch=B)
     X = np.zeros((3, B), dtype=np.float32)
@@ -55,12 +88,12 @@ def play_batch(envs, reservoir, agent, epsilon, learn=True):
 
     while not done.all():
         active = ~done
-        Q = agent.W @ features  # (3, B)
-        if not first_action:
-            Q[ACTIONS.index("double")] = -np.inf
-        n_choices = len(ACTIONS) if first_action else 2
-        greedy = np.argmax(Q, axis=0)
-        random_a = np.random.randint(0, n_choices, size=B)
+        mask = legal_mask(envs, active)
+        Q = agent.W @ features  # (n_actions, B)
+        Qm = np.where(mask, Q, -np.inf)
+        greedy = np.argmax(Qm, axis=0)
+        random_a = np.array([np.random.choice(np.where(mask[:, i])[0]) if active[i] else 0
+                              for i in range(B)])
         explore = np.random.random(B) < epsilon
         chosen = np.where(explore, random_a, greedy)
 
@@ -84,6 +117,7 @@ def play_batch(envs, reservoir, agent, epsilon, learn=True):
                 X[:, i] = raw_input_vec(*next_obs[i])
         next_state = reservoir.step(X)
         next_features = np.vstack([next_state, np.ones(B, dtype=np.float32)])
+        next_mask = legal_mask(envs, still_active)
 
         if learn:
             for a in range(len(ACTIONS)):
@@ -95,15 +129,15 @@ def play_batch(envs, reservoir, agent, epsilon, learn=True):
                 cont_mask = still_active & (chosen == a)
                 if cont_mask.any():
                     idx = np.where(cont_mask)[0]
-                    next_q = np.max(agent.W @ next_features[:, idx], axis=0)
-                    target = 0.95 * next_q
+                    next_q_all = np.where(next_mask[:, idx], agent.W @ next_features[:, idx], -np.inf)
+                    next_q = np.max(next_q_all, axis=0)
+                    target = step_reward[idx] + 0.95 * next_q
                     td = target - Q[a, idx]
                     agent.W[a] += agent.lr * (features[:, idx] @ td) / len(idx)
 
         reward = reward + step_reward
         features = next_features
         obs = next_obs
-        first_action = False
     return reward
 
 
@@ -119,25 +153,25 @@ def evaluate_agent(agent, reservoir, n_hands, seed):
             hands += 1
             continue
         reservoir.reset(batch=1)
-        first_action = True
         total, usable, dealer_up = obs
         state = reservoir.step(raw_input_vec(total, usable, dealer_up).reshape(3, 1))
         features = np.vstack([state, [[1.0]]])
+        hand_reward = 0.0
         while True:
-            valid = ACTIONS if first_action else ("hit", "stand")
+            valid = env.legal_actions()
             q = (agent.W @ features).ravel()
             idxs = [ACTIONS.index(a) for a in valid]
             action = ACTIONS[idxs[np.argmax(q[idxs])]]
             obs, reward, done = env.step(action)
+            hand_reward += reward
             if done:
-                total_reward += reward
-                wins += reward > 0
+                total_reward += hand_reward
+                wins += hand_reward > 0
                 hands += 1
                 break
             total, usable, dealer_up = obs
             state = reservoir.step(raw_input_vec(total, usable, dealer_up).reshape(3, 1))
             features = np.vstack([state, [[1.0]]])
-            first_action = False
     return wins / hands, total_reward / hands
 
 
@@ -152,37 +186,60 @@ def evaluate_policy_fn(policy_fn, n_hands, seed):
             wins += r > 0
             hands += 1
             continue
-        first_action = True
+        hand_reward = 0.0
         while True:
             total, usable, dealer_up = obs
-            valid = ACTIONS if first_action else ("hit", "stand")
-            action = policy_fn(total, usable, dealer_up, first_action)
+            valid = env.legal_actions()
+            first_action = len(env.player) == 2
+            pair_rank = env.player[0] if (first_action and env.player[0] == env.player[1]) else None
+            action = policy_fn(total, usable, dealer_up, first_action, pair_rank)
             if action not in valid:
                 action = "hit"
             obs, reward, done = env.step(action)
+            hand_reward += reward
             if done:
-                total_reward += reward
-                wins += reward > 0
+                total_reward += hand_reward
+                wins += hand_reward > 0
                 hands += 1
                 break
-            first_action = False
     return wins / hands, total_reward / hands
 
 
 def main():
+    import os
     W, source = load_connectome()
     print(f"connectome source: {source}, shape={W.shape}")
     reservoir = Reservoir(W, n_inputs=3, seed=0)
     n_features = W.shape[0] + 1
     agent = QReadout(n_features=n_features, lr=scaled_lr(n_features), seed=0)
+
+    # Resume from an existing checkpoint rather than throwing its progress
+    # away -- a plain rerun would otherwise reinitialize the same seeded
+    # agent/envs and just replay the identical run.
+    hands_done = 0
+    if os.path.exists("agent_weights.npy") and os.path.exists("agent_meta.json"):
+        with open("agent_meta.json") as f:
+            prev_meta = json.load(f)
+        if prev_meta.get("source") == source and prev_meta.get("n_neurons") == W.shape[0]:
+            old_W = np.load("agent_weights.npy")
+            agent.W[:old_W.shape[0]] = old_W  # new actions (e.g. split) start blind
+            hands_done = int(prev_meta.get("hands_done", 0))
+            print(f"resuming from checkpoint at hand {hands_done} "
+                  f"(actions {old_W.shape[0]} -> {agent.W.shape[0]})")
+
     print(f"n_features={n_features} lr={agent.lr:.2e}")
 
+    resume_start = hands_done
     history = []
-    hands_done = 0
-    n_batches = N_HANDS // BATCH
+    n_batches = (hands_done + HANDS_THIS_RUN) // BATCH
+    start_batch = hands_done // BATCH
     window_reward, window_wins, window_hands = 0.0, 0, 0
-    for b in range(1, n_batches + 1):
-        eps = epsilon_at(hands_done)
+    last_checkpoint = 0.0
+    for b in range(start_batch + 1, n_batches + 1):
+        if EPSILON_RESTART is not None:
+            eps = epsilon_at(hands_done - resume_start, start=EPSILON_RESTART)
+        else:
+            eps = epsilon_at(hands_done)
         envs = [BlackjackEnv(seed=1000 * b + i) for i in range(BATCH)]
         rewards = play_batch(envs, reservoir, agent, eps, learn=True)
         hands_done += BATCH
@@ -195,11 +252,14 @@ def main():
             history.append((hands_done, win_rate, ev))
             print(f"hand {hands_done:>8} eps={eps:.3f} win_rate={win_rate:.3f} ev/hand={ev:+.3f}")
             window_reward, window_wins, window_hands = 0.0, 0, 0
+            if time.time() - last_checkpoint > CHECKPOINT_EVERY_SECONDS:
+                checkpoint(agent, source, W.shape[0], hands_done, win_rate, ev)
+                last_checkpoint = time.time()
 
     agent_wr, agent_ev = evaluate_agent(agent, reservoir, EVAL_HANDS, seed=100)
     basic_wr, basic_ev = evaluate_policy_fn(basic_strategy_action, EVAL_HANDS, seed=100)
 
-    def random_policy(total, usable, dealer_up, first_action):
+    def random_policy(total, usable, dealer_up, first_action, pair_rank=None):
         valid = ACTIONS if first_action else ("hit", "stand")
         return valid[np.random.randint(len(valid))]
 
@@ -225,13 +285,19 @@ def main():
     with open("results_report.txt", "w") as f:
         f.write(f"connectome source: {source}\n")
         f.write(f"reservoir size: {W.shape[0]} neurons\n")
-        f.write(f"training hands: {N_HANDS}\n\n")
+        f.write(f"training hands: {hands_done}\n\n")
         f.write(f"{'Policy':<28}{'Win rate':>10}{'EV/hand':>10}\n")
         f.write(f"{'Fly-reservoir Q-agent':<28}{agent_wr:>10.3f}{agent_ev:>+10.3f}\n")
         f.write(f"{'Basic strategy':<28}{basic_wr:>10.3f}{basic_ev:>+10.3f}\n")
         f.write(f"{'Random':<28}{random_wr:>10.3f}{random_ev:>+10.3f}\n")
 
-    np.save("agent_weights.npy", agent.W)
+    checkpoint(agent, source, W.shape[0], hands_done, agent_wr, agent_ev)
+    with open("agent_meta.json") as f:
+        meta = json.load(f)
+    meta["done"] = True
+    with open("agent_meta.json.tmp", "w") as f:
+        json.dump(meta, f)
+    os.replace("agent_meta.json.tmp", "agent_meta.json")
     return agent, reservoir
 
 

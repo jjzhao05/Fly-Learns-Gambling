@@ -1,8 +1,8 @@
 connectome source: flywire_full_brain
 reservoir size: 138639 neurons
-training hands: 10000
+training hands: 600000
 
 Policy                        Win rate   EV/hand
-Fly-reservoir Q-agent            0.385    -0.161
+Fly-reservoir Q-agent            0.405    -0.115
 Basic strategy                   0.418    -0.059
-Random                           0.296    -0.458
+Random                           0.316    -0.421
