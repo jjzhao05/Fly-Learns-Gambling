@@ -1,8 +1,3 @@
-"""Real neuron positions for the brain plot. For the full FlyWire brain,
-joins connectome indices to real soma (x, y) + cell class from the public
-flywire_annotations table and caches the join to disk. For smaller
-connectomes (no real position data), falls back to a 2-D spectral layout
-of the synapse graph itself."""
 import os
 import urllib.request
 import numpy as np
@@ -53,8 +48,6 @@ def full_brain_positions(n):
 
 
 def spectral_positions(W):
-    """Quick 2-D layout from the synapse graph itself, for connectomes
-    small enough that this is cheap (no real anatomy needed)."""
     Wd = abs(W)
     u, s, _ = svds(Wd + Wd.T, k=2)
     emb = u * s

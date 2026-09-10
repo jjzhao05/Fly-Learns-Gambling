@@ -1,4 +1,3 @@
-"""Compare the trained agent's learned policy grid to basic strategy."""
 import numpy as np
 from connectome import load_connectome
 from reservoir import Reservoir
@@ -24,7 +23,7 @@ def build_policy_grid(agent, reservoir):
                 state = reservoir.step(x)
                 features = featurize(state)
                 q = agent.W @ features
-                q[ACTIONS.index("split")] = -np.inf  # not a real pair, never legal here
+                q[ACTIONS.index("split")] = -np.inf
                 learned = ACTIONS[np.argmax(q)][0].upper()
                 ref = basic_strategy_action(total, usable, dealer_up)[0].upper()
                 row.append(f"{learned}{'=' if learned == ref else '!'} ".rjust(4))

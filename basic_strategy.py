@@ -1,7 +1,3 @@
-"""Published basic strategy for a 6-deck, dealer-stands-on-17 game
-(hit/stand/double only, no splits since the agent can't split)."""
-
-# hard totals: {player_total: {dealer_upcard(2-11): action}}
 HARD = {
     8: {u: "hit" for u in range(2, 12)},
     9: {u: ("double" if 3 <= u <= 6 else "hit") for u in range(2, 12)},
@@ -19,7 +15,6 @@ for t in range(2, 8):
 for t in range(18, 22):
     HARD[t] = {u: "stand" for u in range(2, 12)}
 
-# soft totals (usable ace): {player_total: {dealer_upcard: action}}
 SOFT = {
     13: {u: ("double" if u in (5, 6) else "hit") for u in range(2, 12)},
     14: {u: ("double" if u in (5, 6) else "hit") for u in range(2, 12)},
@@ -34,7 +29,6 @@ SOFT = {
 for t in range(12, 13):
     SOFT[t] = {u: "hit" for u in range(2, 12)}
 
-# pairs (double after split assumed): {rank: {dealer_upcard: action}}, rank 1 = A,A
 PAIRS = {
     1: {u: "split" for u in range(2, 12)},
     10: {u: "stand" for u in range(2, 12)},

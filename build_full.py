@@ -1,11 +1,7 @@
-"""Whole-brain (real FlyWire, ~138k neurons) version: load the full
-connectome, join each neuron to its real 3D soma position + cell-class
-from the FlyWire annotation table (so the brain drawing uses real
-anatomy, not a heuristic layout), train the readout at full scale, and
-record a playback trace with only the top-K most active neurons per
-step (full activation vectors are too big to ship to a browser)."""
 import os
+import sys
 import time
+import json
 import urllib.request
 import numpy as np
 import pandas as pd
@@ -57,7 +53,6 @@ CATS = ["optic", "central", "sensory", "visual_projection", "ascending", "descen
         "sensory_ascending", "visual_centrifugal", "motor", "endocrine", "unknown"]
 cat_code = np.array([CATS.index(c) if c in CATS else CATS.index("unknown") for c in super_class], dtype=np.int8)
 
-# a light static "wiring" texture: a random sample of real synapses to draw as faint fibers
 rng = np.random.default_rng(0)
 nnz = W.nnz
 sample_n = min(18000, nnz)
@@ -65,7 +60,6 @@ sample_idx = rng.choice(nnz, size=sample_n, replace=False)
 Wc = W.tocoo()
 edge_sample = np.stack([Wc.row[sample_idx], Wc.col[sample_idx]], axis=1).astype(np.int32)
 
-import sys
 sys.path.insert(0, _HERE)
 from reservoir import Reservoir
 from agent import QReadout, featurize
@@ -125,7 +119,6 @@ for h in range(N_TRACE_HANDS):
     trace.append(hand)
     print(f"[{time.time()-T0:.0f}s] traced hand {h+1}/{N_TRACE_HANDS}")
 
-import json
 data = {
     "n_neurons": n,
     "positions": np.stack([pos_x, pos_y], axis=1).round(0).astype(int).tolist(),

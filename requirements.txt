@@ -5,3 +5,4 @@ pandas
 pyarrow
 streamlit
 plotly
+flygym==2.1.0

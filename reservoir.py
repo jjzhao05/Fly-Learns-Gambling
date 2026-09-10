@@ -1,13 +1,9 @@
-"""Fixed (untrained) leaky-integrator RNN reservoir built from a sparse
-connectome. Supports batched state (n_neurons x batch) so many blackjack
-hands can be simulated through the reservoir at once."""
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import eigs
 
 
 def _spectral_radius(W, iters=100, seed=0):
-    """Power iteration estimate of the largest-magnitude eigenvalue."""
     rng = np.random.default_rng(seed)
     n = W.shape[0]
     try:
@@ -42,7 +38,6 @@ class Reservoir:
         return self.state
 
     def step(self, x):
-        """x: (n_inputs, batch) array."""
         pre = self.W @ self.state + self.W_in @ x
         self.state = (1 - self.leak) * self.state + self.leak * np.tanh(pre)
         return self.state

@@ -1,9 +1,3 @@
-"""Train a linear Q-learning readout on a fixed fly-connectome reservoir
-to play blackjack, then compare it to published basic strategy.
-
-Hands are simulated in batches so the (potentially whole-brain-sized)
-reservoir's sparse matrix-vector product is done once per batch step
-instead of once per hand."""
 import json
 import os
 import time
@@ -14,31 +8,21 @@ import matplotlib.pyplot as plt
 
 from connectome import load_connectome
 from reservoir import Reservoir
-from blackjack_env import BlackjackEnv, ACTIONS, hand_value
+from blackjack_env import BlackjackEnv, ACTIONS
 from agent import QReadout, featurize
 from basic_strategy import basic_strategy_action
 
-HANDS_THIS_RUN = 100_000  # how many more hands to play, on top of whatever's
-                           # already in the checkpoint -- each run is additive
+HANDS_THIS_RUN = 500_000
 BATCH = 64
-LR_REFERENCE = 0.002  # base learning rate, scaled by scaled_lr() below
+LR_REFERENCE = 0.002
 EPS_START, EPS_END, EPS_DECAY_HANDS = 1.0, 0.02, 7_000
-EPSILON_RESTART = 0.3  # set a value (0-1) to reopen exploration and decay
-                        # from there again on resume (e.g. after adding a new
-                        # action, so it actually gets tried); None to keep
-                        # decaying from hands_done as if nothing changed
+EPSILON_RESTART = 0.05
 LOG_EVERY_BATCHES = 10
-CHECKPOINT_EVERY_SECONDS = 20  # so a live viewer (streamlit_app.py) sees progress
+CHECKPOINT_EVERY_SECONDS = 20
 EVAL_HANDS = 1_500
 
 
 def checkpoint(agent, source, n_neurons, hands_done, win_rate, ev):
-    # Write to a temp file and atomically rename over the real one -- a
-    # plain np.save/json.dump writes the target file in place, so a
-    # concurrent reader (streamlit_app.py, polling every rerun) can catch
-    # it mid-write and see a truncated/corrupt file. os.replace is atomic
-    # on both Windows and POSIX, so readers only ever see a complete old
-    # or complete new file, never a partial one.
     np.save("agent_weights.npy.tmp.npy", agent.W)
     os.replace("agent_weights.npy.tmp.npy", "agent_weights.npy")
     with open("agent_meta.json.tmp", "w") as f:
@@ -48,9 +32,6 @@ def checkpoint(agent, source, n_neurons, hands_done, win_rate, ev):
 
 
 def scaled_lr(n_features, reference_n=301):
-    """Keep the effective SGD step size roughly constant as reservoir size
-    (and thus feature-vector dimension) changes, since the update step's
-    norm otherwise grows with sqrt(n_features)."""
     return LR_REFERENCE * np.sqrt(reference_n / n_features)
 
 
@@ -64,7 +45,6 @@ def epsilon_at(hand_idx, start=EPS_START):
 
 
 def legal_mask(envs, active):
-    """(n_actions, B) bool mask of which actions are legal in each active lane."""
     mask = np.zeros((len(ACTIONS), len(envs)), dtype=bool)
     for i, e in enumerate(envs):
         if active[i]:
@@ -89,7 +69,7 @@ def play_batch(envs, reservoir, agent, epsilon, learn=True):
     while not done.all():
         active = ~done
         mask = legal_mask(envs, active)
-        Q = agent.W @ features  # (n_actions, B)
+        Q = agent.W @ features
         Qm = np.where(mask, Q, -np.inf)
         greedy = np.argmax(Qm, axis=0)
         random_a = np.array([np.random.choice(np.where(mask[:, i])[0]) if active[i] else 0
@@ -206,23 +186,19 @@ def evaluate_policy_fn(policy_fn, n_hands, seed):
 
 
 def main():
-    import os
     W, source = load_connectome()
     print(f"connectome source: {source}, shape={W.shape}")
     reservoir = Reservoir(W, n_inputs=3, seed=0)
     n_features = W.shape[0] + 1
     agent = QReadout(n_features=n_features, lr=scaled_lr(n_features), seed=0)
 
-    # Resume from an existing checkpoint rather than throwing its progress
-    # away -- a plain rerun would otherwise reinitialize the same seeded
-    # agent/envs and just replay the identical run.
     hands_done = 0
     if os.path.exists("agent_weights.npy") and os.path.exists("agent_meta.json"):
         with open("agent_meta.json") as f:
             prev_meta = json.load(f)
         if prev_meta.get("source") == source and prev_meta.get("n_neurons") == W.shape[0]:
             old_W = np.load("agent_weights.npy")
-            agent.W[:old_W.shape[0]] = old_W  # new actions (e.g. split) start blind
+            agent.W[:old_W.shape[0]] = old_W
             hands_done = int(prev_meta.get("hands_done", 0))
             print(f"resuming from checkpoint at hand {hands_done} "
                   f"(actions {old_W.shape[0]} -> {agent.W.shape[0]})")
@@ -271,7 +247,7 @@ def main():
     print(f"{'Basic strategy':<28}{basic_wr:>10.3f}{basic_ev:>+10.3f}")
     print(f"{'Random':<28}{random_wr:>10.3f}{random_ev:>+10.3f}")
 
-    hands, win_rates, evs = zip(*history)
+    hands, win_rates, _ = zip(*history)
     plt.figure(figsize=(8, 5))
     plt.plot(hands, win_rates, label="win rate")
     plt.axhline(basic_wr, color="gray", linestyle="--", label="basic strategy (final)")

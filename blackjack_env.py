@@ -1,7 +1,3 @@
-"""Standard casino blackjack: 6-deck shoe, dealer stands on all 17s,
-blackjack pays 3:2, double down on first two cards only. A split plays as
-two sequential sub-hands, each settled against its own fresh dealer draw
-(same up-card) -- simpler than tracking two hands at once, same result."""
 import numpy as np
 
 ACTIONS = ("hit", "stand", "double", "split")
@@ -9,7 +5,7 @@ N_DECKS = 6
 
 
 def make_shoe(rng):
-    deck = list(range(1, 11)) + [10, 10, 10]  # A..9,10,J,Q,K -> ranks 1..10
+    deck = list(range(1, 11)) + [10, 10, 10]
     shoe = deck * 4 * N_DECKS
     rng.shuffle(shoe)
     return shoe
@@ -123,4 +119,4 @@ class BlackjackEnv:
             self.doubled = True
             self.player.append(self._draw())
             return self._advance()
-        return self._advance()  # stand
+        return self._advance()
