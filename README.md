@@ -1,10 +1,10 @@
 # Fly connectome blackjack
 
-Teaching a fly the finest human experience, gambling.
+Teaching a fly the finest of all human experiences: gambling.
 
 It's actually just a Q-learning layer, which picks hit/stand/double/split, on top of the connectome of a fruit fly.
 
-Watch it play here:
+Watch it play [here](https://jjzhao05-fly-learns-gambling-streamlit-app-fovr1n.streamlit.app/)
 
 ## Files
 - `connectome.py` - downloads and caches the real connectome
