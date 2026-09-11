@@ -21,24 +21,25 @@ TABLE_CSS = """
 <style>
 .felt{background:radial-gradient(120% 140% at 50% -10%, #2a6349, #1f4d3a);
   border:1px solid #173d2d;border-radius:12px;padding:20px 16px;color:#eef7f0;
-  display:flex;flex-direction:column;justify-content:center;gap:14px;height:340px}
-.row{display:flex;flex-direction:column;gap:6px;align-items:center}
+  display:flex;flex-direction:column;justify-content:flex-start;gap:14px;height:370px;
+  overflow:hidden}
+.row{display:flex;flex-direction:column;gap:6px;align-items:center;max-width:100%}
 .label{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:#bfe3cf;opacity:.85}
-.cards{display:flex;gap:6px;min-height:60px;align-items:center;justify-content:center;flex-wrap:wrap;perspective:400px}
-.card{width:40px;height:58px;border-radius:6px;background:#fbf9f3;color:#1c1f1c;
-  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;
-  box-shadow:0 2px 5px rgba(0,0,0,.35)}
+.cards{display:flex;gap:6px;height:60px;align-items:center;justify-content:center;
+  flex-wrap:nowrap;overflow:hidden;perspective:400px;max-width:100%}
+.card{width:40px;min-width:20px;flex:0 1 40px;height:58px;border-radius:6px;background:#fbf9f3;
+  color:#1c1f1c;display:flex;align-items:center;justify-content:center;font-weight:700;
+  font-size:1.1rem;box-shadow:0 2px 5px rgba(0,0,0,.35)}
 .card.back{background:repeating-linear-gradient(45deg,#8a3b3b,#8a3b3b 4px,#7a3232 4px,#7a3232 8px);color:transparent}
 .card.deal{animation:dealIn .35s ease-out backwards}
 .card.flip{animation:flipReveal .4s ease-in-out backwards}
-@keyframes dealIn{0%{transform:translate(-60px,-32px) rotate(-10deg);opacity:0}100%{transform:none;opacity:1}}
+@keyframes dealIn{0%{transform:translate(-20px,-14px) rotate(-10deg);opacity:0}100%{transform:none;opacity:1}}
 @keyframes flipReveal{0%{transform:scaleX(0)}45%{transform:scaleX(0)}100%{transform:scaleX(1)}}
 .total{font-size:.82rem;background:rgba(0,0,0,.28);border-radius:999px;padding:3px 12px;align-self:center;min-height:1.1em}
-.action{min-height:1.3rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;font-size:.82rem;color:#ffd98a;text-align:center}
+.action{min-height:1.9rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;font-size:.82rem;color:#ffd98a;text-align:center}
 .compare{min-height:1rem;font-size:.7rem;text-align:center;opacity:.9}
 .compare.match{color:#8fe3a8} .compare.diff{color:#f2b880}
-.outcome-slot{min-height:1.9rem;display:flex;align-items:center;justify-content:center}
-.outcome{text-align:center;font-weight:700;font-size:.85rem;padding:4px 10px;border-radius:8px;display:inline-block;align-self:center}
+.outcome{text-align:center;font-weight:700;font-size:.85rem;padding:4px 10px;border-radius:8px;display:inline-block}
 .outcome.win{background:#3f8f5c;color:#08210f} .outcome.lose{background:#c1503f;color:#2a0906} .outcome.push{background:#3a4a42;color:#eef1ec}
 </style>
 """
@@ -65,18 +66,17 @@ def table_html(dealer_cards, dealer_back, player_cards, total_text="", dealer_to
     if dealer_back:
         d_html += '<div class="card back deal">?</div>'
     p_html = _cards_html(player_cards, new_player)
-    outcome_inner = f'<div class="outcome {outcome[0]}">{outcome[1]}</div>' if outcome else ""
-    outcome_html = f'<div class="outcome-slot">{outcome_inner}</div>'
+    action_html = f'<div class="outcome {outcome[0]}">{outcome[1]}</div>' if outcome else action_text
     compare_html = (f'<div class="compare {"match" if compare_match else "diff"}">'
                      f'{compare_text}</div>')
     return (TABLE_CSS +
             f'<div class="felt"><div class="row"><div class="label">Dealer</div>'
             f'<div class="cards">{d_html}</div>'
             f'<div class="total">{dealer_total_text}</div></div>'
-            f'<div class="action">{action_text}</div>{compare_html}'
+            f'<div class="action">{action_html}</div>{compare_html}'
             f'<div class="row"><div class="label">Fly</div>'
             f'<div class="cards">{p_html}</div>'
-            f'<div class="total">{total_text}</div></div>{outcome_html}</div>')
+            f'<div class="total">{total_text}</div></div></div>')
 
 
 LOG_CSS = """
@@ -209,9 +209,9 @@ const active = {{x: [], y: [], mode: "markers", type: "scattergl",
                 marker: {{size: [], color: "#ffcf6b", opacity: 0.95, line: {{width: 0}}}}}};
 Plotly.newPlot("brainplot", [base, active], {{
   paper_bgcolor: "#0d1310", plot_bgcolor: "#0d1310",
-  xaxis: {{visible: false}}, yaxis: {{visible: false, scaleanchor: "x"}},
-  margin: {{l: 0, r: 0, t: 0, b: 0}}, showlegend: false
-}}, {{displayModeBar: false, responsive: true}});
+  xaxis: {{visible: false, fixedrange: true}}, yaxis: {{visible: false, scaleanchor: "x", fixedrange: true}},
+  margin: {{l: 0, r: 0, t: 0, b: 0}}, showlegend: false, dragmode: false
+}}, {{staticPlot: true, displayModeBar: false, responsive: true}});
 
 const frames = {json.dumps(frames)};
 function applyFrame(f) {{
@@ -258,9 +258,8 @@ if "continuous_play" not in st.session_state:
 if "session_value" not in st.session_state:
     st.session_state.session_value = 0.0
 
-col1, col2, col3 = st.columns(3)
+col1, col3 = st.columns(2)
 col1.metric("Hands trained", f"{meta.get('hands_done', 0):,}")
-col2.metric("Win rate", f"{meta.get('win_rate', 0):.1%}")
 hands_slot = col3.empty()
 hands_slot.metric("Hands played", f"{st.session_state.hand_seed:,}")
 
