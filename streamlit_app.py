@@ -94,6 +94,7 @@ LOG_CSS = """
 .logrow .result{opacity:.55;font-size:.7rem}
 .logrow.match .fly{color:#8fe3a8}
 .logrow.diff .fly{color:#f2b880}
+.logrow.natural .fly{opacity:.55}
 .logrow .result.win{color:#8fe3a8;opacity:1}
 .logrow .result.lose{color:#f28f80;opacity:1}
 .logrow .result.push{opacity:.75}
@@ -107,17 +108,20 @@ def render_log_header(entries, session_value, hands_played, basic_ev):
                   f"({avg:+.3f}/hand, basic strategy ≈ {basic_ev:+.3f}/hand)")
     if not entries:
         return "**Decision log** &nbsp;·&nbsp; fly vs. basic strategy" + value_part
-    matches = sum(e["match"] for e in entries)
-    pct = matches / len(entries)
+    decided = [e for e in entries if e["match"] is not None]
+    if not decided:
+        return "**Decision log** &nbsp;·&nbsp; fly vs. basic strategy" + value_part
+    matches = sum(e["match"] for e in decided)
+    pct = matches / len(decided)
     return (f"**Decision log** &nbsp;·&nbsp; fly vs. basic strategy &nbsp;&nbsp; "
-            f"**Running accuracy: {pct:.0%}** ({matches}/{len(entries)})" + value_part)
+            f"**Running accuracy: {pct:.0%}** ({matches}/{len(decided)})" + value_part)
 
 
 def render_log_html(entries):
     if not entries:
         return LOG_CSS + '<div class="logwrap"><div class="logempty">No decisions yet -- deal a hand.</div></div>'
     rows = "".join(
-        f'<div class="logrow {"match" if e["match"] else "diff"}">'
+        f'<div class="logrow {"match" if e["match"] else ("diff" if e["match"] is not None else "natural")}">'
         f'<span class="hand">#{e["hand"]}</span>'
         f'<span class="hand-state">{e["total"]}{" soft" if e["usable"] else ""} vs {RANK(e["dealer_up"])}</span>'
         f'<span class="fly">fly: {e["action"].upper()}</span>'
@@ -334,6 +338,14 @@ if deal_clicked or st.session_state.continuous_play:
         time.sleep(deal_pause)
 
     if env.done:
+        # Commit before any animation sleep, so an interrupted rerun can never
+        # play out a blackjack without logging it.
+        log_entry = {"hand": hand_no, "total": hand_total(player_cards), "usable": True,
+                     "dealer_up": dealer_up, "action": "natural", "basic": "natural", "match": None,
+                     "result": outcome_badge(env.natural_reward, True)}
+        st.session_state.decision_log = (st.session_state.decision_log + [log_entry])[-50:]
+        st.session_state.session_value += env.natural_reward
+
         with brain_slot.container():
             st.iframe(render_brain_html(pos_x_b64, pos_y_b64, cat_b64, PALETTE,
                                          [IDLE_FRAME], 1000),
@@ -345,7 +357,7 @@ if deal_clicked or st.session_state.continuous_play:
                                         outcome_badge(env.natural_reward, True),
                                         flip_hole=True),
                              unsafe_allow_html=True)
-        st.session_state.session_value += env.natural_reward
+        log_slot.markdown(render_log_html(st.session_state.decision_log), unsafe_allow_html=True)
         header_slot.markdown(render_log_header(st.session_state.decision_log, st.session_state.session_value,
                                                  st.session_state.hand_seed, BASIC_EV),
                               unsafe_allow_html=True)
@@ -357,6 +369,8 @@ if deal_clicked or st.session_state.continuous_play:
         brain_frames = []
         events = []
         pending_entries = []
+        hand_entries = []
+        total_reward = 0.0
 
         frame_delay_ms = max(8, int(1000 * STEP_HOLD / speed / SUBSTEPS))
         decision_wait = frame_delay_ms * SUBSTEPS / 1000.0
@@ -365,13 +379,13 @@ if deal_clicked or st.session_state.continuous_play:
             n = max(0, round(seconds * 1000 / frame_delay_ms))
             brain_frames.extend([brain_frames[-1] if brain_frames else IDLE_FRAME] * n)
 
-        def append_settle_events(cards, dealer_hand, hand_reward):
+        def append_settle_events(cards, dealer_hand, hand_reward, finalize=None):
             events.append((0.4 / speed,
                             table_html(dealer_hand[:2], False, cards,
                                        f"Total {hand_total(cards)}",
                                        f"Total {hand_total(dealer_hand[:2])}",
                                        "dealer flips…", flip_hole=True),
-                            None, None))
+                            None, None, None))
             pad_frames(0.4 / speed)
             shown = 2
             while shown < len(dealer_hand):
@@ -381,14 +395,14 @@ if deal_clicked or st.session_state.continuous_play:
                                            f"Total {hand_total(cards)}",
                                            f"Total {hand_total(dealer_hand[:shown])}",
                                            "dealer hits", new_dealer=1),
-                                None, None))
+                                None, None, None))
                 pad_frames(0.5 / speed)
             events.append((0.4 / speed,
                             table_html(dealer_hand, False, cards,
                                        f"Total {hand_total(cards)}",
                                        f"Total {hand_total(dealer_hand)}", "",
                                        outcome_badge(hand_reward, False)),
-                            None, hand_reward))
+                            None, hand_reward, finalize))
             pad_frames(0.4 / speed)
 
         while True:
@@ -425,7 +439,7 @@ if deal_clicked or st.session_state.continuous_play:
                                        f"deciding… → {action.upper()}",
                                        compare_text=f"basic strategy says {basic_action.upper()}",
                                        compare_match=(action == basic_action)),
-                            log_entry, None))
+                            log_entry, None, None))
 
             obs, reward, done = env.step(action)
 
@@ -435,7 +449,7 @@ if deal_clicked or st.session_state.continuous_play:
                                 table_html([dealer_up], True, player_cards,
                                            f"Total {hand_total(player_cards)}", "",
                                            "SPLIT!", new_player=2),
-                                None, None))
+                                None, None, None))
                 pad_frames(0.5 / speed)
                 if env.aces_split:
                     (cards_a, dealer_a, reward_a), (cards_b, dealer_b, reward_b) = env.split_ace_detail
@@ -444,11 +458,12 @@ if deal_clicked or st.session_state.continuous_play:
                                     table_html([dealer_b[0]], True, cards_b,
                                                f"Total {hand_total(cards_b)}", "",
                                                "Hand 2", new_player=2),
-                                    None, None))
+                                    None, None, None))
                     pad_frames(0.5 / speed)
-                    append_settle_events(cards_b, dealer_b, reward_b)
-                    for e in pending_entries:
-                        e["result"] = outcome_badge(reward, False)
+                    outcome = outcome_badge(reward, False)
+                    append_settle_events(cards_b, dealer_b, reward_b, finalize=(pending_entries, outcome))
+                    hand_entries.extend({**e, "result": outcome} for e in pending_entries)
+                    total_reward += reward
                     pending_entries = []
                     break
             elif action in ("hit", "double"):
@@ -459,13 +474,14 @@ if deal_clicked or st.session_state.continuous_play:
                                            action.upper(), new_player=1,
                                            compare_text=f"basic strategy said {basic_action.upper()}",
                                            compare_match=(action == basic_action)),
-                                None, None))
+                                None, None, None))
                 pad_frames(0.5 / speed)
 
             if env.hand_ended:
-                append_settle_events(player_cards, env.dealer, reward)
-                for e in pending_entries:
-                    e["result"] = outcome_badge(reward, False)
+                outcome = outcome_badge(reward, False)
+                append_settle_events(player_cards, env.dealer, reward, finalize=(pending_entries, outcome))
+                hand_entries.extend({**e, "result": outcome} for e in pending_entries)
+                total_reward += reward
                 pending_entries = []
                 if done:
                     break
@@ -475,28 +491,41 @@ if deal_clicked or st.session_state.continuous_play:
                                 table_html([dealer_up], True, player_cards,
                                            f"Total {hand_total(player_cards)}", "",
                                            "Hand 2", new_player=2),
-                                None, None))
+                                None, None, None))
                 pad_frames(0.5 / speed)
                 continue
 
             total, usable, dealer_up = obs
+
+        # Commit the hand's outcome now, before any animation sleeps -- so a page
+        # refresh or new click mid-animation can never lose or duplicate a hand.
+        base_log = list(st.session_state.decision_log)
+        base_net = st.session_state.session_value
+        st.session_state.decision_log = (base_log + hand_entries)[-50:]
+        st.session_state.session_value = base_net + total_reward
 
         with brain_slot.container():
             st.iframe(render_brain_html(pos_x_b64, pos_y_b64, cat_b64, PALETTE,
                                          brain_frames, frame_delay_ms),
                       height=470)
         time.sleep(IFRAME_WARMUP)
-        for wait_seconds, html, log_entry, reward_delta in events:
+        display_log = list(base_log)
+        display_net = base_net
+        for wait_seconds, html, log_entry, reward_delta, finalize in events:
             time.sleep(wait_seconds)
             table_slot.markdown(html, unsafe_allow_html=True)
             if log_entry is not None:
-                st.session_state.decision_log.append(log_entry)
-                st.session_state.decision_log = st.session_state.decision_log[-50:]
-                log_slot.markdown(render_log_html(st.session_state.decision_log), unsafe_allow_html=True)
+                display_log.append(log_entry)
             if reward_delta is not None:
-                st.session_state.session_value += reward_delta
-                header_slot.markdown(render_log_header(st.session_state.decision_log,
-                                                         st.session_state.session_value,
+                display_net += reward_delta
+            if finalize is not None:
+                entries, outcome = finalize
+                for e in entries:
+                    e["result"] = outcome
+            if log_entry is not None or finalize is not None:
+                log_slot.markdown(render_log_html(display_log), unsafe_allow_html=True)
+            if reward_delta is not None:
+                header_slot.markdown(render_log_header(display_log, display_net,
                                                          st.session_state.hand_seed, BASIC_EV),
                                       unsafe_allow_html=True)
 
